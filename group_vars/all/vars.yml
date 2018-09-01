@@ -1,0 +1,4 @@
+---
+# Add global settings here
+
+Stack.Name: "Microtrader Stack - {{ env }}"

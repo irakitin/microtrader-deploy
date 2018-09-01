@@ -1,0 +1,699 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Microtrader Stack - {{ env }}
+
+Parameters:
+  LogRetention:
+    Type: Number
+    Description: Log retention (days)
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+  DatabaseMultiAZ:
+    Type: String
+    Description: Enable or Disable RDS Multi Availability Zone
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+  DatabaseInstanceType:
+    Type: String
+    Description: Database instance type
+    Default: db.t2.micro
+    AllowedValues:
+      - db.t2.micro
+      - db.t2.small
+      - db.t2.medium
+  DatabaseName:
+    Type: String
+    Description: Database name
+  DatabaseUser:
+    Type: String
+    Description: Database username
+  DatabasePassword:
+    Type: String
+    Description: Database password
+    NoEcho: true
+  ApplicationDnsName:
+    Type: String
+    Description: Hostname portion of application FQDN
+  ApplicationDesiredCount:
+    Type: Number
+    Description: Desired number of application instances
+    Default: 1
+  ApplicationImageId:
+    Type: String
+    Description: AmazonMachineImageId
+  ApplicationKeyName:
+    Type: String
+    Description: EC2 key pair for SSH access
+  ApplicationInstanceType:
+    Type: String
+    Description: Application EC2 instance type
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+  MicrotraderDashboardHttpPort:
+    Type: Number
+    Description: Container port for Microtrader Dashboard
+  MicrotraderQuoteHttpPort:
+    Type: Number
+    Description: Container port for Microtrader Quote Service
+  MicrotraderAuditHttpPort:
+    Type: Number
+    Description: Container port for Microtrader Audit Service
+  VpcName:
+    Type: String
+    Description: Name of the target VPC
+    Default: Default
+
+Conditions:
+  DatabaseSingleAZCondition:
+    Fn::Equals:
+      - Ref: DatabaseMultiAZ
+      - "false"
+
+Resources:
+  DashboardServiceLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ecs/DashboardService/dashboard
+      RetentionInDays:
+        Ref: LogRetention
+  PortfolioServiceLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ecs/PortfolioService/portfolio
+      RetentionInDays:
+        Ref: LogRetention
+  AuditServiceLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ecs/AuditService/audit
+      RetentionInDays:
+        Ref: LogRetention
+  QuoteServiceLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ecs/QuoteService/quote
+      RetentionInDays:
+        Ref: LogRetention
+  DmesgLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ec2/ApplicationAutoscaling/var/log/dmesg
+      RetentionInDays:
+        Ref: LogRetention
+  MessagesLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ec2/ApplicationAutoscaling/var/log/messages
+      RetentionInDays:
+        Ref: LogRetention
+  DockerLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ec2/ApplicationAutoscaling/var/log/docker
+      RetentionInDays:
+        Ref: LogRetention
+  EcsAgentLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ec2/ApplicationAutoscaling/var/log/ecs/ecs-agent
+      RetentionInDays:
+        Ref: LogRetention
+  EcsInitLogGroup:
+    Type: AWS::Logs:LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}/ec2/ApplicationAutoscaling/var/log/ecs/ecs-init
+      RetentionInDays:
+        Ref: LogRetention
+  ApplicationAutoscalingToApplicationDatabaseEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+    GroupId:
+      Ref: ApplicationAutoscalingSecurityGroup
+    DestinationSecurityGroupId:
+      Ref: ApplicationDatabaseSecurityGroup
+  ApplicationAutoscalingToApplicationDatabaseIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+    GroupId:
+      Ref: ApplicationDatabaseSecurityGroup
+    SourceSecurityGroupId:
+      Ref: ApplicationAutoscalingSecurityGroup
+  ApplicationDatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Application Database Security Group
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: ${VpcName}VpcId
+      SecurityGroupIngress: []
+      SecurityGroupEgress:
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 192.0.2.0/32
+      Tags:
+        - Key: Name
+          Value: ${AWS::StackName}-ApplicationDatabaseSecurityGroup
+  ApplicationDatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Application Database Subnet Group
+      SubnetIds:
+        - Fn::ImportValue:
+            Fn::Sub: ${VpcName}HighSubnetA
+        - Fn::ImportValue:
+            Fn::Sub: ${VpcName}HighSubnetB
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-ApplicationDatabaseSubnetGroup
+  ApplicationDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: {{ config_database_deletion_policy | default('Delete') }}
+    Properties:
+      Engine: MySQL
+      EngineVersion: 5.7
+      DBInstanceClass:
+        Ref: DatabaseInstanceType
+      AllocatedStorage: 10
+      StorageType: gp2
+      MasterUsername:
+        Ref: DatabaseUsername
+      MasterPassword:
+        Ref: DatabasePassword
+      DBName:
+        Ref: DatabaseName
+      VPCSecurityGroups:
+        - Ref: ApplicationDatabaseSecurityGroup
+      DBSubnetGroupName:
+        Ref: ApplicationDatabaseSubnetGroup
+      MultiAZ:
+        Ref: DatabaseMultiAZ
+      AvailabilityZone:
+        Fn::If:
+          - DatabaseSingleAZCondition
+          - Fn::Sub: ${AWS::Region}a
+          - Ref: AWS::NoValue
+  ApplicationDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Name:
+        Fn::Join:
+          - ""
+          - - Fn::Sub: ${ApplicationDnsName}.
+            - Fn::ImportValue:
+                Fn::Sub: ${VpcName}VpcDomain
+      TTL: "300"
+      HostedZoneName:
+        Fn::Join:
+          - ""
+          - - Fn::ImportValue:
+                Fn::Sub: ${VpcName}VpcDomain
+            - "."
+      Type: CNAME
+      Comment:
+        Fn::Sub: ${AWS::StackName} Application Record
+      ResourceRecords:
+        - Fn::Sub: ${ApplicationLoadBalancer.DNSName}
+  MicrotraderToApplicationLoadBalancerEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      GroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+      DestinationSecurityGroupId:
+        Ref: ApplicationLoadBalancerSecurityGroup
+  MicrotraderToApplicationLoadBalancerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      GroupId:
+        Ref: ApplicationLoadBalancerSecurityGroup
+      SourceSecurityGroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+  ApplicationLoadBalancerToMicrotraderAuditEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      IpProtocol: tcp
+      FromPort:
+        Ref: MicrotraderAuditHttpPort
+      ToPort:
+        Ref: MicrotraderAuditHttpPort
+      GroupId:
+        Ref: ApplicationLoadBalancerSecurityGroup
+      DestinationSecurityGroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+  ApplicationLoadBalancerToMicrotraderAuditIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort:
+        Ref: MicrotraderAuditHttpPort
+      ToPort:
+        Ref: MicrotraderAuditHttpPort
+      GroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+      SourceSecurityGroupId:
+        Ref: ApplicationLoadBalancerSecurityGroup
+  ApplicationLoadBalancerToMicrotraderQuoteEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      IpProtocol: tcp
+      FromPort:
+        Ref: MicrotraderQuoteHttpPort
+      ToPort:
+        Ref: MicrotraderQuoteHttpPort
+      GroupId:
+        Ref: ApplicationLoadBalancerSecurityGroup
+      DestinationSecurityGroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+  ApplicationLoadBalancerToMicrotraderQuoteIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort:
+        Ref: MicrotraderQuoteHttpPort
+      ToPort:
+        Ref: MicrotraderQuoteHttpPort
+      GroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+      SourceSecurityGroupId:
+        Ref: ApplicationLoadBalancerSecurityGroup
+  ApplicationLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Application Load Balancer Security Group
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: ${VpcName}VpcId
+      SecurityGroupIngress: []
+      SecurityGroupEgress: []
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-ApplicationLoadBalancerSecurityGroup
+  QuoteServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Protocol: HTTP
+      Port:
+        Ref: MicrotraderQuoteHttpPort
+      HealthCheckPath: /quote/
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: ${VpcName}VpcId
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
+  AuditServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Protocol: HTTP
+      Port:
+        Ref: MicrotraderAuditHttpPort
+      HealthCheckPath: /audit/
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: ${VpcName}VpcId
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
+  AuditServiceListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Priority: 1
+      ListenerArn:
+        Ref: ApplicationLoadBalancerHttpListener
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - Fn::Sub: /audit/*
+      Actions:
+        - TargetGroupArn:
+            Ref: AuditServiceTargetGroup
+          Type: forward
+  ApplicationLoadBalancerHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:
+        Ref: ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultAction:
+        - TargetGroupArn:
+            Ref: QuoteServiceTargetGroup
+          Type: forward
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Subnets:
+        - Fn::ImportValue:
+            Fn::Sub: ${VpcName}MediumSubnetA
+        - Fn::ImportValue:
+            Fn::Sub: ${VpcName}MediumSubnetB
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: "false"
+        - Key: idle_timeout.timeout_seconds
+          Value: 30
+      SecurityGroups:
+        - Ref: ApplicationLoadBalancerSecurityGroup
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-ApplicationLoadBalancer
+  PublicLoadBalancerHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:
+        Ref: PublicLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultAction:
+        - TargetGroupArn:
+            Ref: DashboardServiceTargetGroup
+          Type: forward
+  DashboardServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Protocol: HTTP
+      Port:
+        Ref: MicrotraderDashboardHttpPort
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: ${VpcName}VpcId
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
+  PublicLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public Load Balancer Security Group
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: ${VpcName}VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-PublicLoadBalancerSecurityGroup
+  PublicLoadBalancerToMicrotraderDashboardEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      IpProtocol: tcp
+      FromPort:
+        Ref: MicrotraderDashboardHttpPort
+      ToPort:
+        Ref: MicrotraderDashboardHttpPort
+      DestinationSecurityGroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+      GroupId:
+        Ref: PublicLoadBalancerSecurityGroup
+  PublicLoadBalancerToMicrotraderDashboardIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort:
+        Ref: MicrotraderDashboardHttpPort
+      ToPort:
+        Ref: MicrotraderDashboardHttpPort
+      SourceSecurityGroupId:
+        Ref: PublicLoadBalancerSecurityGroup
+      GroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets:
+        - Fn::ImportValue:
+            Fn::Sub: ${VpcName}PublicSubnetA
+        - Fn::ImportValue:
+            Fn::Sub: ${VpcName}PublicSubnetB
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: "false"
+        - Key: idle_timeout.timeout_seconds
+          Value: 30
+      SecurityGroups:
+        - Ref: PublicLoadBalancerSecurityGroup
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-PublicLoadBalancer
+  ApplicationAutoscalingInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ref: ApplicationAutoscalingInstanceRole
+  ApplicationAutoscalingInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ECSContainerInstancePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RegisterContainerInstance
+                  - ecs:DeregisterContainerInstance
+                Resource:
+                  Fn::Sub: arn:aws:ecs:${AWS::Region}:${AWS:AccountId}:cluster/${ApplicationCluster}
+              - Effect: Allow
+                Action:
+                  - ecs:DiscoverPollEndpoint
+                  - ecs:Submit*
+                  - ecs:Poll
+                  - ecs:StartTelemetrySession
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+        - PolicyName: HazelcastClusterDiscoveryPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              Effect: Allow
+              Action: ecs2:DescribeInstances
+              Resource: "*"
+        - PolicyName: CloudwatchLogsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${AWS::StackName}*
+  ApplicationAutoscalingLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          commands:
+            10_first_run:
+              command: sh firstrun.sh
+              cwd: /home/ec2-user
+              env:
+                STACK_NAME:
+                  Ref: AWS::StackName
+                AUTOSCALING_GROUP: ApplicationAutoscaling
+                AWS_DEFAULT_REGION:
+                  Ref: AWS::Region
+                ECS_CLUSTER:
+                  Ref: ApplicationCluster
+                PROXY_URL:
+                  Fn::ImportValue:
+                    Fn::Sub: ${VpcName}ProxyUrl
+                DOCKER_NETWORK_MODE: host
+    Properties:
+      ImageId:
+        Ref: ApplicationImageId
+      InstanceType:
+        Ref: ApplicationInstanceType
+      KeyName:
+        Ref: ApplicationKeyName
+      IamInstanceProfile:
+        Ref: ApplicationAutoscalingInstanceProfile
+      SecurityGroups:
+        - Ref: ApplicationAutoscalingSecurityGroup
+      UserData:
+        Fn::Base64:
+          Fn::Join: ["", [
+            "#!/bin/bash\n",
+            "/opt/aws/bin/cfn-init -v ",
+            "  --stack", { "Ref" : "AWS::StackName" },
+            "  --resource ApplicationAutoscalingLaunchConfiguration ",
+            "  --region ", { "Ref" : "AWS::Region" },
+            "  --http-proxy ", "Fn::ImportValue": { "Fn::Sub": "${VpcName}ProxyUrl" },
+            "  --https-proxy ", "Fn::ImportValue": { "Fn::Sub": "${VpcName}ProxyUrl" },
+            "\n",
+            "/opt/aws/bin/cfn-signal -e $? ",
+            "  --stack", { "Ref" : "AWS::StackName" },
+            "  --resource ApplicationAutoscaling ",
+            "  --region ", { "Ref" : "AWS::Region" },
+            "  --http-proxy ", "Fn::ImportValue": { "Fn::Sub": "${VpcName}ProxyUrl" },
+            "  --https-proxy ", "Fn::ImportValue": { "Fn::Sub": "${VpcName}ProxyUrl" },
+            "\n"
+          ] ]
+  ApplicationAutoscaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - DmesgLogGroup
+      - MessagesLogGroup
+      - DockerLogGroup
+      - EcsAgentLogGroup
+      - EcsInitLogGroup
+    CreationPolicy:
+      ResourceSignal:
+        Count:
+          Ref: ApplicationDesiredCount
+        Timeout: PT15M
+    Properties:
+      LaunchConfigurationName:
+        Ref: ApplicationAutoscalingLaunchConfiguration
+      MinSize: 0
+      MaxSize: 4
+      DesiredCapacity: ApplicationDesiredCount
+      VPCZoneIdentifier:
+        - Fn::ImportValue:
+            Fn::Sub: ${VpcName}MediumSubnetA
+        - Fn::ImportValue:
+            Fn::Sub: ${VpcName}MediumSubnetB
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Sub: ${AWS::StackName}-ApplicationAutoscaling-instance
+          PropagateAtLaunch: "true"
+        - Key: hazelcast.group
+          Value:
+            Ref: ApplicationCluster
+          PropagateAtLaunch: "true"
+  MicrotraderClusterDiscoverIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 5701
+      ToPort: 5710
+      SourceSecurityGroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+      GroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+  MicrotraderClusterDiscoverEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 5701
+      ToPort: 5710
+      DestinationSecurityGroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+      GroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+  MicrotraderEventBusIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 15701
+      ToPort: 15704
+      SourceSecurityGroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+      GroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+  MicrotraderEventBusEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 15701
+      ToPort: 15704
+      DestinationSecurityGroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+      GroupId:
+        Ref: ApplicationAutoscalingSecurityGroup
+  ApplicationAutoscalingSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription:
+        Fn::Sub: ${AWS::StackName} Application Autoscaling Security Group
+      VpcId:
+        Fn::Import:
+          Fn::Sub: ${VpcName}VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp:
+            Fn::ImportValue:
+              Fn::Sub: ${VpcName}VpcCidr
+      SecurityGroupEgress:
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp:
+            Fn::Join: ["", [ "Fn::ImportValue": { "Fn::Sub": "${VpcName}VpcDnsServer" }, "/32" ] ]
+        - IpProtocol: tcp
+          FromPort: 3128
+          ToPort: 3128
+          DestinationSecurityGroupId:
+            Fn::ImportValue:
+              Fn::Sub: ${VpcName}ProxySecurityGroup
+
+Outputs:
+  PublicLoadBalancerUrl:
+    Description: Public Load Balancer URL
+    Value:
+      Fn::Sub: ${PublicLoadBalancer.DNSName}
