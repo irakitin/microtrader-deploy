@@ -1,4 +1,6 @@
 ---
 # Add global settings here
 
-Stack.Name: "Microtrader Stack - {{ env }}"
+Stack.Name: "microtrader-{{ env }}"
+
+Sts.Region: eu-central-1

@@ -3,16 +3,27 @@
 
 # aws-sts settings
 # At a minimum you must specify the ARN of the IAM role
-# that should be assumed to run your provisinoing tasks
+# that should be assumed to run your provisioning tasks
 # e.g. Sts.Role: arn:aws:iam::012345678901:role/admin
 # Sts.Role: <ARN of your IAM role>
-Sts.Role: arn:aws:iam::543279062384:role/admin
+Sts.Role: arn:aws:iam::875455485177:role/DockerProductionAWSAdmin
 
-# environment specific settings are always prefixed with config_
-Stack.Inputs.MyStackInput: "{{ 10000 | random }}"
-
+# Override all deletion policies of type AWS::RDS::DBInstance
 AWS::RDS::DBInstance:
   DeletionPolicy: Delete
 
+# Override all deletion policies of type AWS::Logs::LogGroup
 AWS::Logs::LogGroup:
   DeletionPolicy: Delete
+
+Stack.Inputs.MicrotraderQuoteHttpPort: 8000
+Stack.Inputs.MicrotraderAuditHttpPort: 8001
+Stack.Inputs.MicrotraderDashboardHttpPort: 8002
+
+Stack.Inputs.DatabaseName: audit
+Stack.Inputs.DatabaseUser: audit
+Stack.Inputs.DatabasePassword: super-secret-password
+
+Stack.Inputs.ApplicationDnsName: dev-microtrader
+Stack.Inputs.ApplicationImageId: ami-01b6abba37064c067
+Stack.Inputs.ApplicationKeyName: docker-production-aws
