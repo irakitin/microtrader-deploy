@@ -587,7 +587,8 @@ Resources:
           CidrIp: 192.0.2.0/32
       Tags:
         - Key: Name
-          Value: ${AWS::StackName}-ApplicationDatabaseSecurityGroup
+          Value:
+            Fn::Sub: ${AWS::StackName}-ApplicationDatabaseSecurityGroup
   ApplicationDatabaseSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -1017,9 +1018,9 @@ Resources:
         Ref: ApplicationDesiredCount
       VPCZoneIdentifier:
         - Fn::ImportValue:
-            Fn::Sub: ${VpcName}MediumSubnetA
+            Fn::Sub: ${VpcName}PublicSubnetA
         - Fn::ImportValue:
-            Fn::Sub: ${VpcName}MediumSubnetB
+            Fn::Sub: ${VpcName}PublicSubnetB
       Tags:
         - Key: Name
           Value:
